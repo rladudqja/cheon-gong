@@ -18,12 +18,14 @@ import SettlementPage from './pages/SettlementPage';
 import TimeAnalysisPage from './pages/TimeAnalysisPage';
 import CostSummaryPage from './pages/CostSummaryPage';
 import ImportPage from './pages/ImportPage';
+import SyncPage from './pages/SyncPage';
 
 const NAV = [
   { section: '대시보드' },
   { path: '/', label: '종합 현황', icon: '📊' },
   { section: '기본 설정' },
-  { path: '/import', label: '데이터 가져오기', icon: '📥' },
+  { path: '/sync', label: '스프레드시트 동기화', icon: '🔄' },
+  { path: '/import', label: 'Excel 가져오기', icon: '📥' },
   { path: '/config', label: '기본정보', icon: '⚙️' },
   { path: '/price-table', label: '기성양식 (단가표)', icon: '📄' },
   { path: '/equipment', label: '장비구분표', icon: '🔧' },
@@ -102,6 +104,7 @@ export default function App() {
 
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/sync" element={<SyncPage />} />
           <Route path="/import" element={<ImportPage />} />
           <Route path="/config" element={<ConfigPage />} />
           <Route path="/price-table" element={<PriceTablePage />} />

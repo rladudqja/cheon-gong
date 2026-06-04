@@ -11,6 +11,7 @@ import costsRouter from './routes/costs.js';
 import priceTableRouter from './routes/priceTable.js';
 import reportsRouter from './routes/reports.js';
 import importRouter from './routes/import.js';
+import syncRouter from './routes/sync.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -27,6 +28,7 @@ app.use('/api/costs', costsRouter);
 app.use('/api/price-table', priceTableRouter);
 app.use('/api/reports', reportsRouter);
 app.use('/api/import', importRouter);
+app.use('/api/sync', syncRouter);
 
 // 프론트엔드 정적 파일
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');
