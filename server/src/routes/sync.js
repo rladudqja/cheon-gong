@@ -33,7 +33,7 @@ async function downloadSheet(spreadsheetId) {
 }
 
 // ── 임포트 로직 (import.js와 동일) ──
-function importFromBuffer(buffer) {
+function importFromBuffer(buffer, selectedSheets) {
   const db = getDB();
   const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
   const results = {};
@@ -224,8 +224,13 @@ function importFromBuffer(buffer) {
     '간접비': importIndirect,
   };
 
+  // ★ selectedSheets가 지정되면 해당 시트만 임포트
+  const sheetsToImport = selectedSheets && selectedSheets.length > 0
+    ? selectedSheets
+    : wb.SheetNames;
+
   const tx = db.transaction(() => {
-    for (const sn of wb.SheetNames) {
+    for (const sn of sheetsToImport) {
       const importer = sheetMap[sn];
       if (importer) { try { importer(sn); } catch (e) { errors.push(`${sn}: ${e.message}`); } }
     }
@@ -234,34 +239,35 @@ function importFromBuffer(buffer) {
   tx();
   db.save();
 
-  // spreadsheet_id 유지 (덮어쓰기 방지)
-  const cfgId = db.prepare("SELECT value FROM project_config WHERE key = 'spreadsheet_id'").get();
-  if (!cfgId || !cfgId.value) {
-    // 없으면 그냥 둠
-  }
-
-  return { ok: errors.length === 0, imported: results, errors, sheets: wb.SheetNames };
+  const skipped = wb.SheetNames.filter(sn => !sheetsToImport.includes(sn) || !sheetMap[sn]);
+  return { ok: errors.length === 0, imported: results, errors, sheets: wb.SheetNames, skipped };
 }
 
 // ── 동기화 실행 ──
-async function runSync() {
+async function runSync(selectedSheets) {
   if (syncing) return { ok: false, error: '이미 동기화 중' };
   syncing = true;
 
   const db = getDB();
   const idRow = db.prepare("SELECT value FROM project_config WHERE key = 'spreadsheet_id'").get();
   const spreadsheetId = idRow?.value;
+  // 저장된 선택 시트 (selectedSheets 파라미터 없으면)
+  const savedSheets = db.prepare("SELECT value FROM project_config WHERE key = 'sync_sheets'").get();
+  const sheets = selectedSheets || (savedSheets?.value ? JSON.parse(savedSheets.value) : null);
 
   if (!spreadsheetId) {
     syncing = false;
-    return { ok: false, error: 'spreadsheet_id가 설정되지 않았습니다. 기본정보에서 설정하세요.' };
+    return { ok: false, error: 'spreadsheet_id가 설정되지 않았습니다.' };
   }
 
   try {
     const buffer = await downloadSheet(spreadsheetId);
-    const result = importFromBuffer(buffer);
-    // spreadsheet_id 복원 (import가 config를 덮어쓸 수 있으므로)
+    const result = importFromBuffer(buffer, sheets);
+    // spreadsheet_id, sync_sheets 복원
     db.prepare("INSERT INTO project_config (key, value) VALUES ('spreadsheet_id', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(spreadsheetId);
+    if (savedSheets?.value) {
+      db.prepare("INSERT INTO project_config (key, value) VALUES ('sync_sheets', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(savedSheets.value);
+    }
     db.save();
 
     lastSync = new Date().toISOString();
@@ -281,19 +287,53 @@ router.get('/status', (req, res) => {
   const db = getDB();
   const idRow = db.prepare("SELECT value FROM project_config WHERE key = 'spreadsheet_id'").get();
   const intervalRow = db.prepare("SELECT value FROM project_config WHERE key = 'sync_interval'").get();
+  const sheetsRow = db.prepare("SELECT value FROM project_config WHERE key = 'sync_sheets'").get();
   res.json({
     spreadsheetId: idRow?.value || '',
     autoSync: !!syncInterval,
     intervalMinutes: parseInt(intervalRow?.value) || 0,
+    selectedSheets: sheetsRow?.value ? JSON.parse(sheetsRow.value) : [],
     lastSync,
     lastError,
     syncing
   });
 });
 
-// POST /api/sync/now — 즉시 동기화
+// POST /api/sync/select-sheets — 동기화할 시트 선택 저장 { sheets: ['작업일지','장비대'] }
+router.post('/select-sheets', (req, res) => {
+  const { sheets } = req.body;
+  const db = getDB();
+  db.prepare("INSERT INTO project_config (key, value) VALUES ('sync_sheets', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+    .run(JSON.stringify(sheets || []));
+  db.save();
+  res.json({ ok: true, selected: sheets });
+});
+
+// GET /api/sync/preview — 스프레드시트 시트(탭) 목록 미리보기
+router.get('/preview', async (req, res) => {
+  const db = getDB();
+  const idRow = db.prepare("SELECT value FROM project_config WHERE key = 'spreadsheet_id'").get();
+  if (!idRow?.value) return res.json({ ok: false, error: '스프레드시트 미연결' });
+
+  try {
+    const buffer = await downloadSheet(idRow.value);
+    const wb = XLSX.read(buffer, { type: 'buffer' });
+    const IMPORTABLE = ['기본정보','장비구분표','기성양식','작업일지','장비대','유류비','자재비','노무비','변경계약','간접비'];
+    const sheets = wb.SheetNames.map(name => ({
+      name,
+      importable: IMPORTABLE.includes(name),
+      rows: wb.Sheets[name] ? XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1 }).length - 1 : 0
+    }));
+    res.json({ ok: true, sheets });
+  } catch (e) {
+    res.json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/sync/now — 즉시 동기화 { sheets: ['작업일지','장비대'] } (선택사항)
 router.post('/now', async (req, res) => {
-  const result = await runSync();
+  const { sheets } = req.body || {};
+  const result = await runSync(sheets && sheets.length > 0 ? sheets : null);
   res.json(result);
 });
 
